@@ -38,8 +38,9 @@ namespace LoginGuardSetup
                 Directory.CreateDirectory(InstallDir);
                 Directory.CreateDirectory(DataDir);
 
-                // 1) Uygulama exe'si
+                // 1) Uygulama exe'si (calisan tray varsa once kapat ki kilit acilsin)
                 Console.WriteLine("[1/6] LoginGuard.exe kopyalaniyor...");
+                KillTray();
                 string srcApp = Path.Combine(setupDir, "LoginGuard.exe");
                 if (!File.Exists(srcApp))
                     throw new FileNotFoundException("LoginGuard.exe kurulum yaninda bulunamadi: " + srcApp);
@@ -59,9 +60,10 @@ namespace LoginGuardSetup
                 SetDataAcl(DataDir);
                 CleanupLegacy();
 
-                // 4) config (varsa koru; token/chat verildiyse yaz)
+                // 4) config (varsa koru; token/chat verildiyse yaz) + dosya izinlerini kalitimsal yap
                 Console.WriteLine("[4/6] Yapilandirma...");
                 WriteConfig(dstFf, opts);
+                NormalizeChildrenAcl(DataDir);
 
                 // 5) Zamanlanmis gorev (4625 -> LoginGuard.exe --capture)
                 Console.WriteLine("[5/6] Zamanlanmis gorev (Event 4625) kaydediliyor...");
@@ -126,23 +128,27 @@ namespace LoginGuardSetup
         {
             string configPath = Path.Combine(DataDir, "config.json");
             var ser = new JavaScriptSerializer();
-            Dictionary<string, object> cfg;
+
+            // Eski config'i case-insensitive oku (eski PowerShell 'botToken' ile yeni 'BotToken' cakismasin).
+            var old = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             if (File.Exists(configPath))
             {
-                try { cfg = ser.Deserialize<Dictionary<string, object>>(File.ReadAllText(configPath)); }
-                catch { cfg = new Dictionary<string, object>(); }
+                try
+                {
+                    var raw = ser.Deserialize<Dictionary<string, object>>(File.ReadAllText(configPath));
+                    if (raw != null) foreach (var kv in raw) old[kv.Key] = kv.Value;
+                }
+                catch { }
             }
-            else cfg = new Dictionary<string, object>();
 
-            if (opts.ContainsKey("token")) cfg["BotToken"] = opts["token"];
-            if (opts.ContainsKey("chat")) cfg["ChatId"] = opts["chat"];
-            if (opts.ContainsKey("duration")) cfg["VideoDurationSec"] = int.Parse(opts["duration"]);
-
-            if (!cfg.ContainsKey("BotToken")) cfg["BotToken"] = "";
-            if (!cfg.ContainsKey("ChatId")) cfg["ChatId"] = "";
-            if (!cfg.ContainsKey("VideoDurationSec")) cfg["VideoDurationSec"] = 5;
-            if (!cfg.ContainsKey("CameraName")) cfg["CameraName"] = DetectCamera(ffmpegPath);
-            if (!cfg.ContainsKey("Enabled")) cfg["Enabled"] = true;
+            object v;
+            // Yalnizca canonical anahtarlarla temiz bir config yaz.
+            var cfg = new Dictionary<string, object>();
+            cfg["BotToken"] = opts.ContainsKey("token") ? opts["token"] : (old.TryGetValue("BotToken", out v) ? v : "");
+            cfg["ChatId"] = opts.ContainsKey("chat") ? opts["chat"] : (old.TryGetValue("ChatId", out v) ? v : "");
+            cfg["VideoDurationSec"] = opts.ContainsKey("duration") ? (object)int.Parse(opts["duration"]) : (old.TryGetValue("VideoDurationSec", out v) ? v : 5);
+            cfg["CameraName"] = old.TryGetValue("CameraName", out v) ? v : DetectCamera(ffmpegPath);
+            cfg["Enabled"] = old.TryGetValue("Enabled", out v) ? v : true;
 
             File.WriteAllText(configPath, ser.Serialize(cfg));
         }
@@ -284,6 +290,43 @@ namespace LoginGuardSetup
                 }
             }
             catch (Exception ex) { Console.WriteLine("      (" + file + " hata: " + ex.Message + ")"); }
+        }
+
+        private static void KillTray()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("taskkill.exe", "/IM LoginGuard.exe /F")
+                { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                using (var p = Process.Start(psi))
+                {
+                    p.StandardOutput.ReadToEnd(); p.StandardError.ReadToEnd();
+                    p.WaitForExit(10000);
+                }
+                System.Threading.Thread.Sleep(700);
+            }
+            catch { }
+        }
+
+        private static void NormalizeChildrenAcl(string dir)
+        {
+            // Var olan dosyalarin acik/kalitimsiz ACL'lerini temizleyip klasorden kalitim almalarini saglar.
+            // Boylece yonetici olmayan tray de config/log okuyup yazabilir.
+            try
+            {
+                foreach (string file in Directory.GetFiles(dir))
+                {
+                    try
+                    {
+                        var fi = new FileInfo(file);
+                        var sec = fi.GetAccessControl();
+                        sec.SetAccessRuleProtection(false, false);
+                        fi.SetAccessControl(sec);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
         }
 
         private static void TryDelete(string path)
