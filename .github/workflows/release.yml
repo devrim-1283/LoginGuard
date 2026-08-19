@@ -30,12 +30,16 @@ jobs:
           [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$PWD/dist/ffmpeg.exe", $true)
           $zip.Dispose()
 
-      - name: Create release
+      - name: Create or update release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME `
-            dist/LoginGuard.exe dist/LoginGuardSetup.exe dist/ffmpeg.exe `
-            --title $env:GITHUB_REF_NAME `
-            --notes "LoginGuard $env:GITHUB_REF_NAME - webcam intrusion alerts for Windows. Download LoginGuardSetup.exe and run it."
+          $tag = $env:GITHUB_REF_NAME
+          $notes = "LoginGuard $tag - webcam intrusion alerts for Windows. Download LoginGuardSetup.exe and run it."
+          $exists = gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/LoginGuard.exe dist/LoginGuardSetup.exe dist/ffmpeg.exe --clobber
+          } else {
+            gh release create $tag dist/LoginGuard.exe dist/LoginGuardSetup.exe dist/ffmpeg.exe --title $tag --notes $notes
+          }
