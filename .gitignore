@@ -1,0 +1,13 @@
+# Build ciktilari
+/dist/
+*.exe
+*.pdb
+
+# ffmpeg (buyuk, 3. parti - Release asset olarak dagitilir)
+ffmpeg.exe
+
+# Gecici
+*.log
+*.user
+*.suo
+.vs/
