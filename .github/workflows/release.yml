@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (csc, .NET Framework 4.8)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File build/build.ps1
+
+      - name: Fetch ffmpeg (static build)
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead("$PWD/ffmpeg.zip")
+          $entry = $zip.Entries | Where-Object { $_.FullName -like '*/bin/ffmpeg.exe' } | Select-Object -First 1
+          [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$PWD/dist/ffmpeg.exe", $true)
+          $zip.Dispose()
+
+      - name: Create release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            dist/LoginGuard.exe dist/LoginGuardSetup.exe dist/ffmpeg.exe `
+            --title $env:GITHUB_REF_NAME `
+            --notes "LoginGuard $env:GITHUB_REF_NAME - webcam intrusion alerts for Windows. Download LoginGuardSetup.exe and run it."
